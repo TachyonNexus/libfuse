@@ -16,6 +16,7 @@
 #include "fuse_opt.h"
 #include "fuse_lowlevel.h"
 #include "mount_util.h"
+#include "alluxio_user_data.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -279,6 +280,29 @@ int fuse_daemonize(int foreground)
 int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 		   size_t op_size, void *user_data)
 {
+	struct alluxio_user_data* aud = NULL;
+	bool should_wait_for_fd = false;
+	int received_fd = -1;
+
+	if (user_data != NULL) {
+		aud = (struct lluxio_user_data*) user_data;
+		if (aud->magic == ALLUXIO_FUSE_MAGIC) {
+			printf("Alluxio user data detected. Enabling alluxio fuse hot migration logic %s\n");
+			should_wait_for_fd = aud->should_wait_for_fd();
+			if (should_wait_for_fd) {
+				printf("Waiting for the original fuse to pass the dev fuse fd %s\n");
+				int ret = aud->recv_fuse_fd(&received_fd);
+				printf("Receive fd ret val %d received fd %d\n", ret, received_fd);
+				if (ret != -1) {
+					exit(ret);
+				}
+			}
+		} else {
+			aud = NULL;
+			user_data = NULL;
+		}
+	}
+
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct fuse *fuse;
 	struct fuse_cmdline_opts opts;
@@ -319,9 +343,13 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 		goto out1;
 	}
 
-	if (fuse_mount(fuse,opts.mountpoint) != 0) {
-		res = 4;
-		goto out2;
+	if (received_fd == -1) {
+		fuse_log(FUSE_LOG_ERR, "Skipping mounting fuse; Fuse mount point is taken over from the previous fuse\n");
+	} else {
+		if (fuse_mount(fuse,opts.mountpoint) != 0) {
+			res = 4;
+			goto out2;
+		}
 	}
 
 	if (fuse_daemonize(opts.foreground) != 0) {
@@ -330,9 +358,19 @@ int fuse_main_real(int argc, char *argv[], const struct fuse_operations *op,
 	}
 
 	struct fuse_session *se = fuse_get_session(fuse);
+
 	if (fuse_set_signal_handlers(se) != 0) {
 		res = 6;
 		goto out3;
+	}
+	if (received_fd != -1) {
+		se->fd = received_fd;
+		restore_fuse_state(fuse);
+	}
+	// Register fuse migration handler
+	if (aud != NULL) {
+		aud->migration_callback_context = (void*) fuse;
+		aud->on_migration_callback = fuse_handle_migration;
 	}
 
 	if (opts.singlethread)
