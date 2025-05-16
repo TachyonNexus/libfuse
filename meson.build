@@ -115,7 +115,12 @@ else
 endif
 
 # '.' will refer to current build directory, which contains config.h
-include_dirs = include_directories('include', 'lib', '.')
+include_dirs = include_directories(
+  'include',
+   'lib', 
+   'lib/third_party/cjson', 
+   'lib/third_party/alluxio', 
+   '.')
 
 # Common dependencies
 thread_dep = dependency('threads') 

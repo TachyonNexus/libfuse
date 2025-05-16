@@ -13,6 +13,7 @@
 #include "fuse_misc.h"
 #include "fuse_kernel.h"
 #include "fuse_i.h"
+#include "alluxio_user_data.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,8 +118,18 @@ static void *fuse_do_work(void *data)
 {
 	struct fuse_worker *w = (struct fuse_worker *) data;
 	struct fuse_mt *mt = w->mt;
-
+	struct alluxio_user_data *aud = NULL;
+	if (mt->se->userdata != NULL) {
+		aud = (alluxio_user_data*) mt->se->userdata;
+	}
+	
+	
 	while (!fuse_session_exited(mt->se)) {
+		if (aud != NULL && aud->is_migrating()) {
+			sleep(1);
+			continue;
+		}
+
 		int isforget = 0;
 		int res;
 
